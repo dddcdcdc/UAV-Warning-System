@@ -1,0 +1,3 @@
+实际运行的总轮数 (Total Epochs Run): 705
+最佳模型产生于 (Best Model Epoch): 605
+最佳验证集 Loss (Best Val Loss): 0.00022081

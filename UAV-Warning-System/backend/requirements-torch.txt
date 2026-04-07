@@ -1,0 +1,3 @@
+# Optional: install torch only when creating a fresh environment.
+# If you already have GPU torch working, skip this file.
+torch>=2.2.0

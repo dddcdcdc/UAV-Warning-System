@@ -1,0 +1,2 @@
+Best Validation Loss: 0.0002208
+Stopped at Epoch: 705
