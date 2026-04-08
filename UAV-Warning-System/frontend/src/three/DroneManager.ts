@@ -28,16 +28,16 @@ const LABEL_HEIGHT_OFFSET = 0.88;
 
 function createLabelSprite(text: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
-  canvas.width = 320;
-  canvas.height = 96;
+  canvas.width = 384;
+  canvas.height = 112;
   const ctx = canvas.getContext("2d");
   if (ctx) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = "700 30px 'Rajdhani', 'Noto Sans SC', 'Microsoft YaHei', sans-serif";
+    ctx.font = "700 36px 'Rajdhani', 'Noto Sans SC', 'Microsoft YaHei', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.lineJoin = "round";
-    ctx.lineWidth = 8;
+    ctx.lineWidth = 9;
     ctx.strokeStyle = "rgba(14, 24, 34, 0.82)";
     ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
     ctx.fillStyle = "rgba(218, 238, 255, 0.98)";
@@ -53,7 +53,7 @@ function createLabelSprite(text: string): THREE.Sprite {
     depthWrite: false,
   });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(2.55, 0.8, 1.0);
+  sprite.scale.set(3.3, 0.95, 1.0);
   return sprite;
 }
 

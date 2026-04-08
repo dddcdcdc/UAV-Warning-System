@@ -501,13 +501,16 @@ async def list_scenarios() -> dict[str, Any]:
 
 @app.post("/api/scenario/{scenario_name}")
 async def switch_scenario(scenario_name: str) -> dict[str, Any]:
-    global ACTIVE_DRONES, LAST_COUNTS
+    global ACTIVE_DRONES, LAST_COUNTS, RUNTIME_ZONES
     scenarios = SIMULATOR.available_scenarios()
     if scenario_name not in scenarios:
         raise HTTPException(status_code=404, detail=f"Scenario `{scenario_name}` does not exist.")
 
     async with STATE_LOCK:
         ACTIVE_DRONES = SIMULATOR.load_scenario(scenario_name)
+        # Built-in scenarios should run against default zones and not inherit
+        # manually drawn polygons from previous interactive tests.
+        RUNTIME_ZONES = _default_runtime_zones()
         SYSTEM_META["data_mode"] = "simulation"
         SYSTEM_META["telemetry_source"] = "internal_simulator"
         LAST_COUNTS = await asyncio.to_thread(_run_ai_and_collision)
@@ -573,9 +576,10 @@ async def set_live_mode(payload: DataModePayload) -> dict[str, Any]:
 
 @app.post("/api/mode/simulation")
 async def set_simulation_mode() -> dict[str, Any]:
-    global ACTIVE_DRONES, LAST_COUNTS
+    global ACTIVE_DRONES, LAST_COUNTS, RUNTIME_ZONES
     async with STATE_LOCK:
         ACTIVE_DRONES = SIMULATOR.load_scenario(DEFAULT_SCENARIO)
+        RUNTIME_ZONES = _default_runtime_zones()
         SYSTEM_META["data_mode"] = "simulation"
         SYSTEM_META["telemetry_source"] = "internal_simulator"
         LAST_COUNTS = await asyncio.to_thread(_run_ai_and_collision)

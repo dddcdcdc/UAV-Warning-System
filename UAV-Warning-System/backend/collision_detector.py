@@ -94,9 +94,13 @@ def _point_in_polygon(point_xy: np.ndarray, polygon: np.ndarray) -> bool:
     for i in range(len(polygon)):
         xi, yi = polygon[i]
         xj, yj = polygon[j]
-        intersects = ((yi > y) != (yj > y)) and (
-            x < (xj - xi) * (y - yi) / max((yj - yi), 1e-9) + xi
-        )
+        intersects = False
+        if (yi > y) != (yj > y):
+            # Keep denominator sign; clamping with max(...) breaks polygons on descending edges.
+            denom = float(yj - yi)
+            if abs(denom) >= 1e-9:
+                x_intersect = float((xj - xi) * (y - yi) / denom + xi)
+                intersects = x < x_intersect
         if intersects:
             inside = not inside
         j = i

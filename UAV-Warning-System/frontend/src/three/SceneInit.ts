@@ -12,6 +12,9 @@ export class SceneInit {
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
   private groundClickHandler: ((point: { x: number; y: number }) => void) | null = null;
   private autoFocusTarget: THREE.Vector3 | null = null;
+  private autoFocusRadius = 18;
+  private suspendAutoFocusUntilMs = 0;
+  private readonly onControlStart: () => void;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -30,7 +33,7 @@ export class SceneInit {
       600
     );
     this.camera.up.set(0, 0, 1);
-    this.camera.position.set(74, -68, 54);
+    this.camera.position.set(68, -62, 50);
     this.camera.lookAt(0, 0, 10);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -47,11 +50,16 @@ export class SceneInit {
     this.controls.enableZoom = true;
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 34;
-    this.controls.maxDistance = 180;
+    this.controls.minDistance = 26;
+    this.controls.maxDistance = 170;
     this.controls.minPolarAngle = 0.25;
     this.controls.maxPolarAngle = Math.PI / 2 - 0.06;
     this.controls.target.set(0, 0, 10);
+    this.onControlStart = () => {
+      // Keep user manual view stable for a while before auto-framing resumes.
+      this.suspendAutoFocusUntilMs = Date.now() + 4200;
+    };
+    this.controls.addEventListener("start", this.onControlStart);
 
     this.setupLights();
     this.handleResize = this.handleResize.bind(this);
@@ -86,12 +94,28 @@ export class SceneInit {
     const centerX = sumX * inv;
     const centerY = sumY * inv;
     const centerZ = sumZ * inv;
+    let maxXYRadius = 0.0;
+    for (const [x, y] of points) {
+      const dx = x - centerX;
+      const dy = y - centerY;
+      maxXYRadius = Math.max(maxXYRadius, Math.hypot(dx, dy));
+    }
+    this.autoFocusRadius = Math.max(8, maxXYRadius);
     this.autoFocusTarget = new THREE.Vector3(centerX, centerY, Math.max(8, centerZ * 0.5 + 6));
   }
 
   render(): void {
-    if (this.autoFocusTarget) {
+    if (this.autoFocusTarget && Date.now() >= this.suspendAutoFocusUntilMs) {
       this.controls.target.lerp(this.autoFocusTarget, 0.09);
+      const desiredDistance = THREE.MathUtils.clamp(24 + this.autoFocusRadius * 1.35, 34, 120);
+      const currentOffset = this.camera.position.clone().sub(this.controls.target);
+      if (currentOffset.lengthSq() < 1e-6) {
+        currentOffset.set(1, -1, 0.8);
+      }
+      currentOffset.normalize().multiplyScalar(desiredDistance);
+      const desiredPosition = this.controls.target.clone().add(currentOffset);
+      desiredPosition.z = Math.max(desiredPosition.z, 16 + this.autoFocusRadius * 0.22);
+      this.camera.position.lerp(desiredPosition, 0.06);
     }
     if (this.camera.position.z < 5.5) {
       this.camera.position.z = 5.5;
@@ -106,6 +130,7 @@ export class SceneInit {
   dispose(): void {
     window.removeEventListener("resize", this.handleResize);
     this.renderer.domElement.removeEventListener("pointerdown", this.handlePointerDown);
+    this.controls.removeEventListener("start", this.onControlStart);
     this.controls.dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement === this.container) {
