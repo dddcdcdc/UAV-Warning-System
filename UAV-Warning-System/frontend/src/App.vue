@@ -25,6 +25,7 @@ const submittingNoFly = ref(false);
 const submittingRestricted = ref(false);
 const resettingNoFly = ref(false);
 const resettingRestricted = ref(false);
+const zoneEditorsCollapsed = ref(false);
 
 let scene: SceneInit | null = null;
 let cityLayers: CitySceneLayers | null = null;
@@ -70,6 +71,13 @@ function clearNoFlyDraft(): void {
 
 function clearRestrictedDraft(): void {
   restrictedDraft.value = [];
+}
+
+function toggleZoneEditors(): void {
+  zoneEditorsCollapsed.value = !zoneEditorsCollapsed.value;
+  if (zoneEditorsCollapsed.value) {
+    drawMode.value = "none";
+  }
 }
 
 async function submitNoFlyPolygon(): Promise<void> {
@@ -193,6 +201,7 @@ watch(
   () => store.lastSeq,
   () => {
     drones?.sync(store.drones);
+    scene?.setAutoFocusPoints(store.drones.map((drone) => drone.current_pos));
     const nextZoneFingerprint = JSON.stringify(store.zones);
     if (nextZoneFingerprint !== zoneFingerprint) {
       cityLayers?.updateZones(store.zones);
@@ -229,7 +238,11 @@ onUnmounted(() => {
     <main class="radar-panel">
       <div ref="sceneHost" class="scene-host"></div>
 
-      <div class="zone-editor-row">
+      <button class="zone-editor-toggle" type="button" @click="toggleZoneEditors">
+        {{ zoneEditorsCollapsed ? "展开区域设置" : "收起区域设置" }}
+      </button>
+
+      <div class="zone-editor-row" :class="{ collapsed: zoneEditorsCollapsed }">
         <div class="zone-editor-box">
           <h3>禁飞区划定模块</h3>
           <p>点击地面逐点采样，至少 3 点形成禁飞区多边形。</p>

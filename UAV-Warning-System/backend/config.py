@@ -12,8 +12,17 @@ class CylinderZone:
     height: float
 
 
+@dataclass(frozen=True)
+class BuildingBox:
+    zone_id: str
+    center: tuple[float, float, float]
+    width: float
+    depth: float
+    height: float
+
+
 # Core timing
-TICK_DT: Final[float] = 0.2          # 5Hz physical update
+TICK_DT: Final[float] = 0.2          # 5Hz physical update(位置刷新频率)
 AI_EVERY_N_TICKS: Final[int] = 2     # 2.5Hz prediction + collision
 PREDICT_STEPS: Final[int] = 10       # Predict next 1.0s
 PREDICT_DT: Final[float] = 0.1
@@ -43,22 +52,22 @@ RESTRICTED_WARN_BUFFER: Final[float] = 2.0
 WORLD_SIZE: Final[tuple[float, float, float]] = (100.0, 100.0, 50.0)
 
 # Obstacles / zones
-BUILDINGS: Final[list[CylinderZone]] = [
-    CylinderZone("B1", (20.0, 20.0, 0.0), 6.0, 32.0),
-    CylinderZone("B2", (-22.0, 24.0, 0.0), 5.5, 28.0),
-    CylinderZone("B3", (-20.0, -18.0, 0.0), 6.5, 30.0),
-    CylinderZone("B4", (24.0, -22.0, 0.0), 5.8, 26.0),
-    # Peripheral city blocks (kept in sync with frontend visual buildings).
-    CylinderZone("B5", (-64.0, 48.0, 0.0), 6.8, 28.0),
-    CylinderZone("B6", (-48.0, 62.0, 0.0), 6.3, 24.0),
-    CylinderZone("B7", (-70.0, -44.0, 0.0), 7.1, 22.0),
-    CylinderZone("B8", (-54.0, -60.0, 0.0), 6.2, 26.0),
-    CylinderZone("B9", (66.0, 50.0, 0.0), 6.8, 25.0),
-    CylinderZone("B10", (52.0, 64.0, 0.0), 6.0, 22.0),
-    CylinderZone("B11", (72.0, -46.0, 0.0), 7.2, 22.0),
-    CylinderZone("B12", (56.0, -62.0, 0.0), 6.3, 24.0),
-    CylinderZone("B13", (-82.0, 8.0, 0.0), 8.7, 21.0),
-    CylinderZone("B14", (84.0, -10.0, 0.0), 8.7, 22.0),
+# Keep aligned with frontend/src/three/Buildings.ts (BoxGeometry specs).
+BUILDINGS: Final[list[BuildingBox]] = [
+    BuildingBox("B1", (20.0, 20.0, 0.0), 8.5, 8.5, 23.0),
+    BuildingBox("B2", (-22.0, 24.0, 0.0), 7.8, 7.8, 21.0),
+    BuildingBox("B3", (-20.0, -18.0, 0.0), 9.2, 9.2, 25.0),
+    BuildingBox("B4", (24.0, -22.0, 0.0), 8.2, 8.2, 22.0),
+    BuildingBox("B5", (-64.0, 48.0, 0.0), 12.0, 10.0, 28.0),
+    BuildingBox("B6", (-48.0, 62.0, 0.0), 9.0, 12.0, 24.0),
+    BuildingBox("B7", (-70.0, -44.0, 0.0), 13.0, 9.0, 22.0),
+    BuildingBox("B8", (-54.0, -60.0, 0.0), 9.0, 10.0, 26.0),
+    BuildingBox("B9", (66.0, 50.0, 0.0), 12.0, 10.0, 25.0),
+    BuildingBox("B10", (52.0, 64.0, 0.0), 9.0, 10.0, 22.0),
+    BuildingBox("B11", (72.0, -46.0, 0.0), 13.0, 10.0, 22.0),
+    BuildingBox("B12", (56.0, -62.0, 0.0), 9.0, 12.0, 24.0),
+    BuildingBox("B13", (-82.0, 8.0, 0.0), 15.0, 13.0, 21.0),
+    BuildingBox("B14", (84.0, -10.0, 0.0), 15.0, 13.0, 22.0),
 ]
 
 NO_FLY_ZONES: Final[list[CylinderZone]] = [

@@ -11,6 +11,7 @@ export class SceneInit {
   private readonly ndc = new THREE.Vector2();
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
   private groundClickHandler: ((point: { x: number; y: number }) => void) | null = null;
+  private autoFocusTarget: THREE.Vector3 | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -29,8 +30,8 @@ export class SceneInit {
       600
     );
     this.camera.up.set(0, 0, 1);
-    this.camera.position.set(92, -88, 62);
-    this.camera.lookAt(0, 0, 8);
+    this.camera.position.set(74, -68, 54);
+    this.camera.lookAt(0, 0, 10);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -46,11 +47,11 @@ export class SceneInit {
     this.controls.enableZoom = true;
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 45;
-    this.controls.maxDistance = 220;
+    this.controls.minDistance = 34;
+    this.controls.maxDistance = 180;
     this.controls.minPolarAngle = 0.25;
     this.controls.maxPolarAngle = Math.PI / 2 - 0.06;
-    this.controls.target.set(0, 0, 8);
+    this.controls.target.set(0, 0, 10);
 
     this.setupLights();
     this.handleResize = this.handleResize.bind(this);
@@ -68,7 +69,30 @@ export class SceneInit {
     this.controls.enabled = enabled;
   }
 
+  setAutoFocusPoints(points: Array<[number, number, number]>): void {
+    if (points.length === 0) {
+      this.autoFocusTarget = null;
+      return;
+    }
+    let sumX = 0;
+    let sumY = 0;
+    let sumZ = 0;
+    for (const [x, y, z] of points) {
+      sumX += x;
+      sumY += y;
+      sumZ += z;
+    }
+    const inv = 1 / points.length;
+    const centerX = sumX * inv;
+    const centerY = sumY * inv;
+    const centerZ = sumZ * inv;
+    this.autoFocusTarget = new THREE.Vector3(centerX, centerY, Math.max(8, centerZ * 0.5 + 6));
+  }
+
   render(): void {
+    if (this.autoFocusTarget) {
+      this.controls.target.lerp(this.autoFocusTarget, 0.09);
+    }
     if (this.camera.position.z < 5.5) {
       this.camera.position.z = 5.5;
     }

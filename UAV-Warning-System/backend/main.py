@@ -4,7 +4,6 @@ import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
 import os
-import re
 import time
 from typing import Any
 
@@ -14,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from ai_engine import VelocityPredictionEngine
-from collision_detector import run_collision_detection
+from collision_detector import estimate_building_collision_time, run_collision_detection
 from config import (
     AI_EVERY_N_TICKS,
     BUILDINGS,
@@ -57,6 +56,8 @@ class WebSocketHub:
         for client in stale:
             self._clients.discard(client)
 
+    #把实时数据广播给所有的websocket连接
+
     @property
     def total_clients(self) -> int:
         return len(self._clients)
@@ -67,16 +68,17 @@ class PolygonZonePayload(BaseModel):
     points: list[list[float]]
     height: float = 50.0
     base_z: float = 0.0
+#定义多边形区域
 
 
 class DataModePayload(BaseModel):
     clear_existing: bool = True
-
+#定义模式切换是否清楚无人机
 
 class ModelReloadPayload(BaseModel):
     model_dir: str
     stats_path: str | None = None
-
+#定义ai模型重载
 
 class TelemetryDronePayload(BaseModel):
     id: str = Field(..., min_length=1)
@@ -100,15 +102,18 @@ class TelemetryDronePayload(BaseModel):
             raise ValueError("current_vel must contain vx,vy,vz.")
         return value
 
+#定义无人机数据结构
 
 class TelemetryBatchPayload(BaseModel):
     drones: list[TelemetryDronePayload]
     source: str | None = "external_stream"
 
+#定义批次无人机
 
 def _vec3(values: list[float] | tuple[float, float, float]) -> list[float]:
     return [float(values[0]), float(values[1]), float(values[2])]
 
+#返回速度
 
 def _zone_from_cylinder(zone: Any, zone_kind: str) -> dict[str, Any]:
     return {
@@ -121,19 +126,46 @@ def _zone_from_cylinder(zone: Any, zone_kind: str) -> dict[str, Any]:
         "base_z": float(zone.center[2]),
     }
 
+#返回圆柱体
+
+def _rect_points(center_x: float, center_y: float, width: float, depth: float) -> list[list[float]]:
+    half_w = width / 2.0
+    half_d = depth / 2.0
+    return [
+        [center_x - half_w, center_y - half_d],
+        [center_x + half_w, center_y - half_d],
+        [center_x + half_w, center_y + half_d],
+        [center_x - half_w, center_y + half_d],
+    ]
+
+
+def _zone_from_building_box(zone: Any) -> dict[str, Any]:
+    center_x, center_y, base_z = zone.center
+    return {
+        "zone_id": zone.zone_id,
+        "shape": "polygon",
+        "zone_kind": "building",
+        "points": _rect_points(center_x, center_y, float(zone.width), float(zone.depth)),
+        "height": float(zone.height),
+        "base_z": float(base_z),
+    }
+
 
 def _default_runtime_zones() -> dict[str, list[dict[str, Any]]]:
     return {
-        "buildings": [_zone_from_cylinder(item, "building") for item in BUILDINGS],
+        "buildings": [_zone_from_building_box(item) for item in BUILDINGS],
         "no_fly": [_zone_from_cylinder(item, "no_fly") for item in NO_FLY_ZONES],
         "restricted": [_zone_from_cylinder(item, "restricted") for item in RESTRICTED_ZONES],
     }
 
 
+#返回相关区域
+
 def _default_bucket_zones(bucket: str) -> list[dict[str, Any]]:
     defaults = _default_runtime_zones()
     return defaults.get(bucket, [])
 
+#按需要获取特定类别
 
 def _next_zone_id(prefix: str, bucket: str) -> str:
     existing = {
@@ -146,6 +178,8 @@ def _next_zone_id(prefix: str, bucket: str) -> str:
         suffix += 1
     return f"{prefix}-{suffix:03d}"
 
+#为新区域生成唯一有序的id。
+
 
 def _init_predictor(model_dir: str | None = None, stats_path: str | None = None) -> VelocityPredictionEngine:
     return VelocityPredictionEngine(
@@ -157,13 +191,14 @@ def _init_predictor(model_dir: str | None = None, stats_path: str | None = None)
     )
 
 
+
 SIMULATOR = ScenarioSimulator(bootstrap_dt=TICK_DT)
 ACTIVE_DRONES = SIMULATOR.load_scenario(DEFAULT_SCENARIO)
 STATE_LOCK = asyncio.Lock()
 RUNTIME_ZONES = _default_runtime_zones()
 
 MODEL_DIR = os.getenv("UAV_MODEL_DIR")
-VEL_STATS_PATH = os.getenv("UAV_VEL_STATS")
+VEL_STATS_PATH = os.getenv("UAV_VEL_STATS") #因此需要通过env写入
 PREDICTOR = _init_predictor(model_dir=MODEL_DIR, stats_path=VEL_STATS_PATH)
 PREDICTOR.predict_for_all(ACTIVE_DRONES)
 LAST_COUNTS = run_collision_detection(
@@ -326,24 +361,20 @@ def _snapshot_payload() -> dict[str, Any]:
 
 def _run_ai_and_collision() -> dict[str, int]:
     PREDICTOR.predict_for_all(ACTIVE_DRONES)
-    counts = run_collision_detection(
+    run_collision_detection(
         ACTIVE_DRONES,
         buildings=RUNTIME_ZONES["buildings"],
         no_fly_zones=RUNTIME_ZONES["no_fly"],
         restricted_zones=RUNTIME_ZONES["restricted"],
     )
     _apply_simulation_emergency_logic()
+    counts = {"GREEN": 0, "YELLOW": 0, "RED": 0}
+    for drone in ACTIVE_DRONES.values():
+        status = str(drone.get("status", "GREEN"))
+        if status not in counts:
+            status = "GREEN"
+        counts[status] += 1
     return counts
-
-
-def _extract_prediction_seconds(message: str) -> float | None:
-    match = re.search(r"预测\s*([0-9]+(?:\.[0-9]+)?)s", message)
-    if not match:
-        return None
-    try:
-        return float(match.group(1))
-    except Exception:
-        return None
 
 
 def _apply_simulation_emergency_logic() -> None:
@@ -351,17 +382,34 @@ def _apply_simulation_emergency_logic() -> None:
         return
 
     for drone in ACTIVE_DRONES.values():
+        sim_state = drone.get("_sim")
+        if isinstance(sim_state, dict) and sim_state.get("halted") and sim_state.get("halt_reason") == "building_collision":
+            drone["status"] = "RED"
+            drone["warning_category"] = "building_collision"
+            persisted_msg = str(drone.get("warning_msg", "")).strip()
+            if not persisted_msg:
+                persisted_msg = "建筑碰撞高危：已执行应急悬停"
+            elif "已执行应急悬停" not in persisted_msg:
+                persisted_msg = f"{persisted_msg}（已执行应急悬停）"
+            drone["warning_msg"] = persisted_msg
+            drone["current_vel"] = [0.0, 0.0, 0.0]
+            drone["predict_traj"] = []
+            continue
+
         if drone.get("status") != "RED":
             continue
         if drone.get("warning_category") != "building_collision":
             continue
 
         warning_msg = str(drone.get("warning_msg", ""))
-        impact_seconds = _extract_prediction_seconds(warning_msg)
+        impact_seconds = estimate_building_collision_time(
+            drone=drone,
+            buildings=RUNTIME_ZONES["buildings"],
+            predict_dt=PREDICT_DT,
+        )
         if impact_seconds is not None and impact_seconds > SIM_BUILDING_HALT_TRIGGER_SEC:
             continue
 
-        sim_state = drone.get("_sim")
         if isinstance(sim_state, dict):
             sim_state["halted"] = True
             sim_state["halt_reason"] = "building_collision"

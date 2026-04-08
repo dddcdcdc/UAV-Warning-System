@@ -27,15 +27,26 @@ from config import (
 Zone = dict[str, Any]
 
 
-def _default_cylinder_zones() -> tuple[list[Zone], list[Zone], list[Zone]]:
+def _rect_points(center_x: float, center_y: float, width: float, depth: float) -> list[list[float]]:
+    half_w = width / 2.0
+    half_d = depth / 2.0
+    return [
+        [center_x - half_w, center_y - half_d],
+        [center_x + half_w, center_y - half_d],
+        [center_x + half_w, center_y + half_d],
+        [center_x - half_w, center_y + half_d],
+    ]
+
+
+def _default_zones() -> tuple[list[Zone], list[Zone], list[Zone]]:
     buildings = [
         {
             "zone_id": item.zone_id,
-            "shape": "cylinder",
+            "shape": "polygon",
             "zone_kind": "building",
-            "center": list(item.center),
-            "radius": float(item.radius),
+            "points": _rect_points(item.center[0], item.center[1], float(item.width), float(item.depth)),
             "height": float(item.height),
+            "base_z": float(item.center[2]),
         }
         for item in BUILDINGS
     ]
@@ -204,16 +215,24 @@ def _evaluate_restricted_zone(
     drone_id: str, drone: dict[str, Any], restricted_zones: list[Zone]
 ) -> tuple[str, str, str]:
     trajectory = drone.get("predict_traj", [])
-    for point in trajectory:
+    for step_idx, point in enumerate(trajectory):
+        t = (step_idx + 1) * PREDICT_DT
         for zone in restricted_zones:
             if not _zone_height_overlap(point, zone):
                 continue
             clearance = _zone_clearance(point, zone)
+            zone_id = zone.get("zone_id", "RZ")
+            if clearance <= 0.0:
+                return (
+                    STATUS_YELLOW,
+                    f"[{drone_id}] 违规预警：预测 {t:.1f}s 后将进入限飞区 {zone_id}",
+                    "restricted_intrusion",
+                )
             if clearance <= RESTRICTED_WARN_BUFFER:
                 return (
                     STATUS_YELLOW,
-                    f"[{drone_id}] 违规预警：预测即将进入限飞区 {zone.get('zone_id', 'RZ')}",
-                    "restricted_intrusion",
+                    f"[{drone_id}] 限飞区接近预警：预测 {t:.1f}s 后逼近 {zone_id}",
+                    "restricted_near",
                 )
     return STATUS_GREEN, "", "general"
 
@@ -274,7 +293,7 @@ def run_collision_detection(
     no_fly_zones: list[Zone] | None = None,
     restricted_zones: list[Zone] | None = None,
 ) -> dict[str, int]:
-    default_buildings, default_no_fly, default_restricted = _default_cylinder_zones()
+    default_buildings, default_no_fly, default_restricted = _default_zones()
     used_buildings = buildings if buildings is not None else default_buildings
     used_no_fly = no_fly_zones if no_fly_zones is not None else default_no_fly
     used_restricted = restricted_zones if restricted_zones is not None else default_restricted
@@ -304,3 +323,21 @@ def run_collision_detection(
         counts[drone["status"]] += 1
         drone.pop("_pending_warning_category", None)
     return counts
+
+
+def estimate_building_collision_time(
+    drone: dict[str, Any],
+    buildings: list[Zone],
+    predict_dt: float = PREDICT_DT,
+) -> float | None:
+    trajectory = drone.get("predict_traj", [])
+    for step_idx, point in enumerate(trajectory):
+        for zone in buildings:
+            if str(zone.get("zone_kind", "")) != "building":
+                continue
+            if not _zone_height_overlap(point, zone):
+                continue
+            clearance = _zone_clearance(point, zone)
+            if clearance <= BUILDING_RED_BUFFER:
+                return (step_idx + 1) * predict_dt
+    return None
