@@ -15,6 +15,10 @@ export class SceneInit {
   private autoFocusRadius = 18;
   private suspendAutoFocusUntilMs = 0;
   private readonly onControlStart: () => void;
+  private skyTexture: THREE.CanvasTexture | null = null;
+  private sunGlowTexture: THREE.CanvasTexture | null = null;
+  private sunMesh: THREE.Mesh | null = null;
+  private sunGlow: THREE.Sprite | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -23,14 +27,12 @@ export class SceneInit {
     THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xcfd8e3);
-    this.scene.fog = new THREE.Fog(0xcfd8e3, 180, 380);
 
     this.camera = new THREE.PerspectiveCamera(
       46,
       container.clientWidth / Math.max(1, container.clientHeight),
       1,
-      600
+      1200
     );
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(68, -62, 50);
@@ -40,6 +42,8 @@ export class SceneInit {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, Math.max(1, container.clientHeight));
     this.renderer.shadowMap.enabled = false;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.02;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
 
@@ -61,6 +65,7 @@ export class SceneInit {
     };
     this.controls.addEventListener("start", this.onControlStart);
 
+    this.setupAtmosphere();
     this.setupLights();
     this.handleResize = this.handleResize.bind(this);
     this.handlePointerDown = this.handlePointerDown.bind(this);
@@ -132,6 +137,7 @@ export class SceneInit {
     this.renderer.domElement.removeEventListener("pointerdown", this.handlePointerDown);
     this.controls.removeEventListener("start", this.onControlStart);
     this.controls.dispose();
+    this.disposeAtmosphere();
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement === this.container) {
       this.container.removeChild(this.renderer.domElement);
@@ -139,16 +145,138 @@ export class SceneInit {
   }
 
   private setupLights(): void {
-    const hemi = new THREE.HemisphereLight(0xeef6ff, 0xa5a5a5, 0.9);
+    const hemi = new THREE.HemisphereLight(0xbad8ff, 0x8b947e, 0.96);
     this.scene.add(hemi);
 
-    const sun = new THREE.DirectionalLight(0xffffff, 0.95);
-    sun.position.set(180, -120, 220);
+    const sun = new THREE.DirectionalLight(0xfff0d0, 1.1);
+    if (this.sunMesh) {
+      sun.position.copy(this.sunMesh.position);
+    } else {
+      sun.position.set(-260, -340, 280);
+    }
     this.scene.add(sun);
 
-    const fill = new THREE.DirectionalLight(0xe8f1ff, 0.38);
-    fill.position.set(-120, 100, 80);
+    const fill = new THREE.DirectionalLight(0xe9f2ff, 0.34);
+    fill.position.set(180, 140, 120);
     this.scene.add(fill);
+
+    const ambient = new THREE.AmbientLight(0xa4b9d2, 0.28);
+    this.scene.add(ambient);
+  }
+
+  private setupAtmosphere(): void {
+    this.skyTexture = this.createSkyTexture();
+    this.scene.background = this.skyTexture;
+    this.scene.fog = new THREE.Fog(0xd5dfd3, 260, 940);
+
+    this.sunMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(14, 28, 28),
+      new THREE.MeshBasicMaterial({ color: 0xffdca3, fog: false })
+    );
+    this.sunMesh.position.set(-260, -340, 280);
+    this.scene.add(this.sunMesh);
+
+    this.sunGlowTexture = this.createSunGlowTexture();
+    this.sunGlow = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.sunGlowTexture,
+        color: 0xffe8bb,
+        transparent: true,
+        opacity: 0.82,
+        depthWrite: false,
+        fog: false,
+      })
+    );
+    this.sunGlow.position.copy(this.sunMesh.position);
+    this.sunGlow.scale.set(150, 150, 1);
+    this.scene.add(this.sunGlow);
+  }
+
+  private createSkyTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      const fallback = new THREE.CanvasTexture(canvas);
+      fallback.colorSpace = THREE.SRGBColorSpace;
+      return fallback;
+    }
+
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, "#77a8dd");
+    gradient.addColorStop(0.48, "#b9d5f4");
+    gradient.addColorStop(0.76, "#dce8ef");
+    gradient.addColorStop(1, "#efe8d4");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let i = 0; i < 14; i += 1) {
+      const x = Math.random() * canvas.width;
+      const y = 180 + Math.random() * 420;
+      const width = 120 + Math.random() * 260;
+      const height = 24 + Math.random() * 52;
+      const cloud = ctx.createLinearGradient(x, y, x + width, y + height);
+      cloud.addColorStop(0, "rgba(255,255,255,0.00)");
+      cloud.addColorStop(0.35, "rgba(255,255,255,0.17)");
+      cloud.addColorStop(0.65, "rgba(255,255,255,0.11)");
+      cloud.addColorStop(1, "rgba(255,255,255,0.00)");
+      ctx.fillStyle = cloud;
+      ctx.fillRect(x, y, width, height);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  private createSunGlowTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      const fallback = new THREE.CanvasTexture(canvas);
+      fallback.colorSpace = THREE.SRGBColorSpace;
+      return fallback;
+    }
+    const r = canvas.width / 2;
+    const glow = ctx.createRadialGradient(r, r, 8, r, r, r);
+    glow.addColorStop(0, "rgba(255,233,188,0.95)");
+    glow.addColorStop(0.36, "rgba(255,219,157,0.68)");
+    glow.addColorStop(1, "rgba(255,219,157,0.0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  private disposeAtmosphere(): void {
+    if (this.sunMesh) {
+      const geometry = this.sunMesh.geometry;
+      const material = this.sunMesh.material;
+      this.scene.remove(this.sunMesh);
+      geometry.dispose();
+      if (Array.isArray(material)) {
+        material.forEach((item) => item.dispose());
+      } else {
+        material.dispose();
+      }
+      this.sunMesh = null;
+    }
+    if (this.sunGlow) {
+      const material = this.sunGlow.material as THREE.SpriteMaterial;
+      this.scene.remove(this.sunGlow);
+      material.dispose();
+      this.sunGlow = null;
+    }
+    this.skyTexture?.dispose();
+    this.sunGlowTexture?.dispose();
+    this.skyTexture = null;
+    this.sunGlowTexture = null;
   }
 
   private handlePointerDown(event: PointerEvent): void {

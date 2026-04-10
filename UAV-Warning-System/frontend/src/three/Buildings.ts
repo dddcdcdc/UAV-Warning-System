@@ -20,10 +20,38 @@ type BuildingSpec = {
   tone: FacadeTone;
 };
 
-const ROAD_LENGTH = 220;
-const ROAD_HALF = 9.6;
+const ROAD_LENGTH = 206;
+const ROAD_HALF = 8.4;
 const LANE_CENTER_OFFSET = ROAD_HALF * 0.5;
-const STOP_LINE_OFFSET = 16.0;
+const STOP_LINE_OFFSET = 14.6;
+const CITY_BLOCK_SIZE = ROAD_LENGTH;
+const BACKEND_BUILDING_CENTER_SCALE = 0.92;
+const BACKEND_BUILDING_FOOTPRINT_SCALE = 1.14;
+const BACKEND_BUILDING_HEIGHT_SCALE = 1.18;
+
+const DEFAULT_NO_FLY_ZONES: RuntimeZone[] = [
+  {
+    zone_id: "NFZ-CENTER",
+    shape: "cylinder",
+    zone_kind: "no_fly",
+    center: [0, 0, 0],
+    radius: 8,
+    height: 50,
+    base_z: 0,
+  },
+];
+
+const DEFAULT_RESTRICTED_ZONES: RuntimeZone[] = [
+  {
+    zone_id: "RZ-EAST",
+    shape: "cylinder",
+    zone_kind: "restricted",
+    center: [30, 0, 0],
+    radius: 7,
+    height: 50,
+    base_z: 0,
+  },
+];
 
 const CITY_BUILDINGS: BuildingSpec[] = [
   // 西北：主塔 + 裙楼 + 附楼
@@ -230,6 +258,68 @@ function addRectPlane(
   return mesh;
 }
 
+function createTerrainTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 768;
+  canvas.height = 768;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    const fallback = new THREE.CanvasTexture(canvas);
+    fallback.wrapS = THREE.RepeatWrapping;
+    fallback.wrapT = THREE.RepeatWrapping;
+    return fallback;
+  }
+
+  ctx.fillStyle = "#b8bbb6";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < 3600; i += 1) {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height;
+    const size = 1.2 + Math.random() * 3.4;
+    const shade = 144 + Math.floor(Math.random() * 36);
+    ctx.fillStyle = `rgba(${shade - 8}, ${shade - 6}, ${shade - 10}, 0.18)`;
+    ctx.fillRect(x, y, size, size);
+  }
+
+  for (let i = 0; i < 14; i += 1) {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height;
+    const radius = 42 + Math.random() * 96;
+    const grad = ctx.createRadialGradient(x, y, 8, x, y, radius);
+    grad.addColorStop(0, "rgba(170, 172, 166, 0.22)");
+    grad.addColorStop(1, "rgba(185, 188, 182, 0.0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(5.2, 5.2);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function addGroundEnvironment(scene: THREE.Scene): void {
+  const terrainTexture = createTerrainTexture();
+
+  const cityBlock = new THREE.Mesh(
+    new THREE.PlaneGeometry(CITY_BLOCK_SIZE, CITY_BLOCK_SIZE),
+    new THREE.MeshStandardMaterial({
+      map: terrainTexture,
+      color: 0xe6e8e4,
+      roughness: 0.98,
+      metalness: 0.0,
+    })
+  );
+  cityBlock.position.set(0, 0, -0.02);
+  scene.add(cityBlock);
+}
+
 function addRoadMark(
   scene: THREE.Scene,
   x: number,
@@ -337,7 +427,7 @@ function addDirectionArrow(
 }
 
 function addRoadNetwork(scene: THREE.Scene): void {
-  addRectPlane(scene, ROAD_LENGTH, ROAD_LENGTH, 0xa8b0b9, -0.01);
+  addGroundEnvironment(scene);
 
   const asphaltMat = new THREE.MeshStandardMaterial({
     color: 0x4b5158,
@@ -575,6 +665,37 @@ function createBuildingSpecFromZone(zone: RuntimeZone): BuildingSpec | null {
   };
 }
 
+function specToPolygonZone(spec: BuildingSpec): RuntimeZone {
+  const scaledX = spec.x * BACKEND_BUILDING_CENTER_SCALE;
+  const scaledY = spec.y * BACKEND_BUILDING_CENTER_SCALE;
+  const scaledWidth = spec.width * BACKEND_BUILDING_FOOTPRINT_SCALE;
+  const scaledDepth = spec.depth * BACKEND_BUILDING_FOOTPRINT_SCALE;
+  const scaledHeight = spec.height * BACKEND_BUILDING_HEIGHT_SCALE;
+  const halfW = scaledWidth / 2;
+  const halfD = scaledDepth / 2;
+  return {
+    zone_id: spec.zoneId,
+    shape: "polygon",
+    zone_kind: "building",
+    points: [
+      [scaledX - halfW, scaledY - halfD],
+      [scaledX + halfW, scaledY - halfD],
+      [scaledX + halfW, scaledY + halfD],
+      [scaledX - halfW, scaledY + halfD],
+    ],
+    height: scaledHeight,
+    base_z: 0,
+  };
+}
+
+function fallbackRuntimeZones(): RuntimeZones {
+  return {
+    buildings: CITY_BUILDINGS.map((item) => specToPolygonZone(item)),
+    no_fly: DEFAULT_NO_FLY_ZONES,
+    restricted: DEFAULT_RESTRICTED_ZONES,
+  };
+}
+
 export class CitySceneLayers {
   private readonly buildingGroup = new THREE.Group();
   private readonly zoneGroup = new THREE.Group();
@@ -586,6 +707,8 @@ export class CitySceneLayers {
     scene.add(this.buildingGroup);
     scene.add(this.zoneGroup);
     scene.add(this.draftGroup);
+    // Bootstrap fallback so scene remains complete before first backend packet.
+    this.updateZones(fallbackRuntimeZones());
   }
 
   updateZones(zones: RuntimeZones): void {

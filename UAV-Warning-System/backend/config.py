@@ -54,6 +54,8 @@ WORLD_SIZE: Final[tuple[float, float, float]] = (100.0, 100.0, 50.0)
 # Obstacles / zones
 # Keep aligned with frontend/src/three/Buildings.ts (BoxGeometry specs).
 BUILDING_CENTER_SCALE: Final[float] = 0.92
+BUILDING_FOOTPRINT_SCALE: Final[float] = 1.14
+BUILDING_HEIGHT_SCALE: Final[float] = 1.18
 
 
 def _scaled_center(center: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -62,6 +64,14 @@ def _scaled_center(center: tuple[float, float, float]) -> tuple[float, float, fl
         round(center[1] * BUILDING_CENTER_SCALE, 4),
         center[2],
     )
+
+
+def _scaled_footprint(value: float) -> float:
+    return round(value * BUILDING_FOOTPRINT_SCALE, 4)
+
+
+def _scaled_height(value: float) -> float:
+    return round(value * BUILDING_HEIGHT_SCALE, 4)
 
 
 _BUILDINGS_RAW: Final[list[BuildingBox]] = [
@@ -112,7 +122,13 @@ _BUILDINGS_RAW: Final[list[BuildingBox]] = [
 ]
 
 BUILDINGS: Final[list[BuildingBox]] = [
-    BuildingBox(item.zone_id, _scaled_center(item.center), item.width, item.depth, item.height)
+    BuildingBox(
+        item.zone_id,
+        _scaled_center(item.center),
+        _scaled_footprint(item.width),
+        _scaled_footprint(item.depth),
+        _scaled_height(item.height),
+    )
     for item in _BUILDINGS_RAW
 ]
 
