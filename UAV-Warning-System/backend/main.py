@@ -30,7 +30,7 @@ from simulator import ScenarioSimulator
 
 
 LIVE_DROP_TIMEOUT_SEC = 6.0
-SIM_BUILDING_HALT_TRIGGER_SEC = 0.20
+SIM_BUILDING_HALT_TRIGGER_SEC = 0.40
 
 
 class WebSocketHub:
@@ -138,6 +138,7 @@ def _rect_points(center_x: float, center_y: float, width: float, depth: float) -
         [center_x - half_w, center_y + half_d],
     ]
 
+#类似于建筑四至
 
 def _zone_from_building_box(zone: Any) -> dict[str, Any]:
     center_x, center_y, base_z = zone.center
@@ -244,6 +245,7 @@ def _ensure_live_record(drone_id: str, drone_type: str, pos: list[float]) -> dic
         ACTIVE_DRONES[drone_id] = record
     return record
 
+#输入id，如果不在相应的列表中，则创建并存入
 
 def _append_history(record: dict[str, Any], pos: list[float]) -> None:
     history = record.get("history_pos")
@@ -253,12 +255,13 @@ def _append_history(record: dict[str, Any], pos: list[float]) -> None:
     if len(history) == 0:
         history.append(pos.copy())
         return
+    #历史为空时，直接添加当前位置
 
     prev = np.array(history[-1], dtype=np.float32)
     cur = np.array(pos, dtype=np.float32)
     if float(np.linalg.norm(cur - prev)) > 1e-5:
         history.append(pos.copy())
-
+#位置有显著变化时才记录
 
 def _upsert_live_drone(payload: TelemetryDronePayload) -> None:
     now_ts = time.time()
@@ -276,6 +279,8 @@ def _upsert_live_drone(payload: TelemetryDronePayload) -> None:
         vel_vec = (np.array(pos, dtype=np.float32) - np.array(prev_pos, dtype=np.float32)) / dt
         vel = vel_vec.round(4).tolist()
 
+    #直接使用payload中的历史数据，如果没有则根据当前和之前的位置计算出历史数据
+
     if payload.history_pos:
         rebuilt: deque[list[float]] = deque(maxlen=HISTORY_LEN)
         for item in payload.history_pos[-HISTORY_LEN:]:
@@ -287,6 +292,7 @@ def _upsert_live_drone(payload: TelemetryDronePayload) -> None:
     else:
         _append_history(record, pos)
 
+    #如果有则加入历史，没有，则重建历史
     record["current_pos"] = pos
     record["current_vel"] = vel
     record["_live_last_ingest"] = payload.timestamp if payload.timestamp else now_ts
@@ -303,7 +309,7 @@ def _advance_live_drones(dt: float) -> None:
             continue
 
         if staleness <= dt * 0.9:
-            continue
+            continue   #外部数据的断帧补偿
 
         pos = np.array(record.get("current_pos", [0.0, 0.0, 0.0]), dtype=np.float32)
         vel = np.array(record.get("current_vel", [0.0, 0.0, 0.0]), dtype=np.float32)
@@ -316,6 +322,7 @@ def _advance_live_drones(dt: float) -> None:
     for drone_id in stale_ids:
         ACTIVE_DRONES.pop(drone_id, None)
 
+#收集离线id，统一清理，通过物理学外推（这里似乎是临时代替模拟器的作用）
 
 def _snapshot_payload() -> dict[str, Any]:
     drones = []
@@ -336,17 +343,19 @@ def _snapshot_payload() -> dict[str, Any]:
             }
         )
 
+    #存入默认无人机信息
+
     return {
         "timestamp": time.time(),
         "scenario": SIMULATOR.current_scenario,
         "engine": PREDICTOR.info,
         "system": {
             "running": SYSTEM_META["running"],
-            "tick_dt": TICK_DT,
-            "predict_dt": PREDICT_DT,
+            "tick_dt": TICK_DT, #主循环时间步长
+            "predict_dt": PREDICT_DT, #预测时间步长
             "ws_clients": WS_HUB.total_clients,
             "data_mode": SYSTEM_META["data_mode"],
-            "telemetry_source": SYSTEM_META["telemetry_source"],
+            "telemetry_source": SYSTEM_META["telemetry_source"], #数据源
         },
         "stats": {
             "total": len(drones),
@@ -358,6 +367,7 @@ def _snapshot_payload() -> dict[str, Any]:
         "drones": drones,
     }
 
+#系统状态快照生成
 
 def _run_ai_and_collision() -> dict[str, int]:
     PREDICTOR.predict_for_all(ACTIVE_DRONES)
@@ -368,6 +378,8 @@ def _run_ai_and_collision() -> dict[str, int]:
         restricted_zones=RUNTIME_ZONES["restricted"],
     )
     _apply_simulation_emergency_logic()
+
+#模拟状态下的紧急处理逻辑
     counts = {"GREEN": 0, "YELLOW": 0, "RED": 0}
     for drone in ACTIVE_DRONES.values():
         status = str(drone.get("status", "GREEN"))
@@ -426,16 +438,16 @@ async def _system_loop() -> None:
         async with STATE_LOCK:
             if SYSTEM_META["running"]:
                 if SYSTEM_META["data_mode"] == "simulation":
-                    SIMULATOR.update(TICK_DT)
+                    SIMULATOR.update(TICK_DT) #模拟器更新无人机状态
                 else:
-                    _advance_live_drones(TICK_DT)
+                    _advance_live_drones(TICK_DT) 
 
-                SYSTEM_META["tick_count"] += 1
-                if SYSTEM_META["tick_count"] % AI_EVERY_N_TICKS == 0:
+                SYSTEM_META["tick_count"] += 1 #系统状态更新
+                if SYSTEM_META["tick_count"] % AI_EVERY_N_TICKS == 0: #每隔一定tick运行一次AI和碰撞检测
                     LAST_COUNTS = await asyncio.to_thread(_run_ai_and_collision)
-            payload = _snapshot_payload()
+            payload = _snapshot_payload()   #快照记录
 
-        await WS_HUB.broadcast_json(payload)
+        await WS_HUB.broadcast_json(payload) #广播
         await asyncio.sleep(TICK_DT)
 
 
@@ -453,6 +465,7 @@ async def lifespan(_: FastAPI):
             except asyncio.CancelledError:
                 pass
 
+#应用生命周期管理，启动系统主循环，优雅关闭
 
 app = FastAPI(
     title="UAV In-Flight Warning System",
@@ -468,6 +481,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+#初始化FastAPI应用，添加CORS中间件
 
 @app.get("/")
 async def index() -> dict[str, Any]:
@@ -490,6 +504,7 @@ async def health() -> dict[str, Any]:
         "data_mode": SYSTEM_META["data_mode"],
     }
 
+#系统状态监控接口，返回当前运行状态、场景、预测引擎信息和数据模式等基本信息
 
 @app.get("/api/scenarios")
 async def list_scenarios() -> dict[str, Any]:
@@ -498,6 +513,7 @@ async def list_scenarios() -> dict[str, Any]:
         "items": SIMULATOR.available_scenarios(),
     }
 
+#可用场景列表
 
 @app.post("/api/scenario/{scenario_name}")
 async def switch_scenario(scenario_name: str) -> dict[str, Any]:
@@ -514,10 +530,12 @@ async def switch_scenario(scenario_name: str) -> dict[str, Any]:
         SYSTEM_META["data_mode"] = "simulation"
         SYSTEM_META["telemetry_source"] = "internal_simulator"
         LAST_COUNTS = await asyncio.to_thread(_run_ai_and_collision)
-        payload = _snapshot_payload()
+        payload = _snapshot_payload() #生成快照
 
     await WS_HUB.broadcast_json(payload)
     return {"ok": True, "current": SIMULATOR.current_scenario, "description": scenarios[scenario_name]}
+
+#场景切换接口，加载指定场景的无人机数据，重置区域信息，切换到模拟模式，并广播更新后的状态
 
 
 @app.post("/api/control/{action}")
@@ -531,12 +549,15 @@ async def control_system(action: str) -> dict[str, Any]:
     await WS_HUB.broadcast_json(payload)
     return {"ok": True, "running": SYSTEM_META["running"]}
 
+#场景控制:切换大小写，更新运行状态，并广播更新后的状态
+
 
 @app.get("/api/state")
 async def get_state() -> dict[str, Any]:
     async with STATE_LOCK:
         return _snapshot_payload()
 
+#实时快照获取
 
 @app.get("/api/config")
 async def get_config() -> dict[str, Any]:
@@ -551,6 +572,7 @@ async def get_config() -> dict[str, Any]:
         "zones": RUNTIME_ZONES,
     }
 
+#系统配置信息接口，返回世界尺寸、时间步长、预测步长、AI运行频率等配置信息，以及当前的区域信息
 
 @app.get("/api/mode")
 async def get_mode() -> dict[str, Any]:
@@ -559,6 +581,7 @@ async def get_mode() -> dict[str, Any]:
         "telemetry_source": SYSTEM_META["telemetry_source"],
     }
 
+#数据模式接口，返回当前的数据模式和数据源信息
 
 @app.post("/api/mode/live")
 async def set_live_mode(payload: DataModePayload) -> dict[str, Any]:
@@ -573,6 +596,7 @@ async def set_live_mode(payload: DataModePayload) -> dict[str, Any]:
     await WS_HUB.broadcast_json(snapshot)
     return {"ok": True, "data_mode": SYSTEM_META["data_mode"], "cleared": payload.clear_existing}
 
+#设置实时模式
 
 @app.post("/api/mode/simulation")
 async def set_simulation_mode() -> dict[str, Any]:
@@ -587,6 +611,7 @@ async def set_simulation_mode() -> dict[str, Any]:
     await WS_HUB.broadcast_json(snapshot)
     return {"ok": True, "data_mode": SYSTEM_META["data_mode"], "scenario": SIMULATOR.current_scenario}
 
+#设置模拟模式
 
 @app.post("/api/model/reload")
 async def reload_model(payload: ModelReloadPayload) -> dict[str, Any]:
@@ -598,6 +623,7 @@ async def reload_model(payload: ModelReloadPayload) -> dict[str, Any]:
     await WS_HUB.broadcast_json(snapshot)
     return {"ok": True, "engine": PREDICTOR.info}
 
+#AI模型重载接口，接受新的模型目录和统计数据路径，重新初始化预测引擎，并广播更新后的状态
 
 @app.post("/api/telemetry/drone")
 async def ingest_single_telemetry(payload: TelemetryDronePayload) -> dict[str, Any]:
@@ -611,6 +637,7 @@ async def ingest_single_telemetry(payload: TelemetryDronePayload) -> dict[str, A
     await WS_HUB.broadcast_json(snapshot)
     return {"ok": True, "received": 1, "id": payload.id}
 
+#接收单个实时无人机数据的接口，更新相应的无人机记录，运行AI和碰撞检测，并广播更新后的状态
 
 @app.post("/api/telemetry/batch")
 async def ingest_batch_telemetry(payload: TelemetryBatchPayload) -> dict[str, Any]:
@@ -628,6 +655,7 @@ async def ingest_batch_telemetry(payload: TelemetryBatchPayload) -> dict[str, An
     await WS_HUB.broadcast_json(snapshot)
     return {"ok": True, "received": len(payload.drones)}
 
+#接收批次实时无人机数据的接口，更新相应的无人机记录，运行AI和碰撞检测，并广播更新后的状态
 
 @app.post("/api/telemetry/clear")
 async def clear_live_telemetry() -> dict[str, Any]:
@@ -641,6 +669,7 @@ async def clear_live_telemetry() -> dict[str, Any]:
     await WS_HUB.broadcast_json(snapshot)
     return {"ok": True}
 
+#清理无人机并切换到实时模式
 
 @app.post("/api/zones/no-fly/polygon")
 async def add_no_fly_polygon(payload: PolygonZonePayload) -> dict[str, Any]:
@@ -676,6 +705,8 @@ async def add_no_fly_polygon(payload: PolygonZonePayload) -> dict[str, Any]:
     return {"ok": True, "zone": zone}
 
 
+#动态添加多边形禁飞区接口，验证输入数据，更新区域列表，运行AI和碰撞检测，并广播更新后的状态
+
 @app.post("/api/zones/restricted/polygon")
 async def add_restricted_polygon(payload: PolygonZonePayload) -> dict[str, Any]:
     global LAST_COUNTS
@@ -710,6 +741,8 @@ async def add_restricted_polygon(payload: PolygonZonePayload) -> dict[str, Any]:
     return {"ok": True, "zone": zone}
 
 
+#动态添加多边形限制区接口，验证输入数据，更新区域列表，运行AI和碰撞检测，并广播更新后的状态
+
 @app.post("/api/zones/reset")
 async def reset_zones() -> dict[str, Any]:
     global LAST_COUNTS, RUNTIME_ZONES
@@ -720,6 +753,7 @@ async def reset_zones() -> dict[str, Any]:
     await WS_HUB.broadcast_json(snapshot)
     return {"ok": True, "zones": RUNTIME_ZONES}
 
+#完全重置区域接口，恢复默认区域配置，运行AI和碰撞检测，并广播更新后的状态
 
 @app.post("/api/zones/no-fly/reset")
 async def reset_no_fly_zones() -> dict[str, Any]:
@@ -732,6 +766,7 @@ async def reset_no_fly_zones() -> dict[str, Any]:
     return {"ok": True, "no_fly": RUNTIME_ZONES["no_fly"]}
 
 
+#重置禁飞区接口，恢复默认禁飞区配置，运行AI和碰撞检测，并广播更新后的状态
 @app.post("/api/zones/restricted/reset")
 async def reset_restricted_zones() -> dict[str, Any]:
     global LAST_COUNTS
@@ -743,6 +778,7 @@ async def reset_restricted_zones() -> dict[str, Any]:
     return {"ok": True, "restricted": RUNTIME_ZONES["restricted"]}
 
 
+#重置限制区接口，恢复默认限制区配置，运行AI和碰撞检测，并广播更新后的状态
 @app.websocket("/ws/situation")
 async def ws_situation(websocket: WebSocket) -> None:
     await WS_HUB.connect(websocket)
@@ -757,6 +793,8 @@ async def ws_situation(websocket: WebSocket) -> None:
         WS_HUB.disconnect(websocket)
 
 
+#app代表了fastapi。
+#websocket接口，连接后立即发送当前状态快照，并保持连接以便后续广播更新，处理断开连接和异常情况
 if __name__ == "__main__":
     import uvicorn
 

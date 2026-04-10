@@ -84,7 +84,7 @@ def _clearance_to_cylinder(point: list[float], zone: Zone) -> float:
     center = zone.get("center", [0.0, 0.0, 0.0])
     center_xy = np.array(center[:2], dtype=np.float32)
     radius = float(zone.get("radius", 0.0))
-    return float(np.linalg.norm(point_xy - center_xy) - radius)
+    return float(np.linalg.norm(point_xy - center_xy) - radius) #计算到中心距离与半径的差值
 
 
 def _point_in_polygon(point_xy: np.ndarray, polygon: np.ndarray) -> bool:
@@ -115,17 +115,19 @@ def _distance_to_segment(point: np.ndarray, seg_a: np.ndarray, seg_b: np.ndarray
     t = float(np.dot(point - seg_a, ab) / denom)
     t = max(0.0, min(1.0, t))
     nearest = seg_a + t * ab
-    return float(np.linalg.norm(point - nearest))
+    return float(np.linalg.norm(point - nearest)) 
+
+#计算点到线段的最短距离（投影找点计算）
 
 
 def _clearance_to_polygon(point: list[float], zone: Zone) -> float:
     pts = zone.get("points", [])
     if len(pts) < 3:
-        return 1e9
-    polygon = np.array(pts, dtype=np.float32)
-    query = np.array(point[:2], dtype=np.float32)
+        return 1e9  #检查多边形有效性
+    polygon = np.array(pts, dtype=np.float32) 
+    query = np.array(point[:2], dtype=np.float32)   #提取点的二维坐标
 
-    inside = _point_in_polygon(query, polygon)
+    inside = _point_in_polygon(query, polygon) #先判断点是否在多边形内，如果在内部则距离为负，外部则为正
     edge_min = 1e9
     for idx in range(len(polygon)):
         seg_a = polygon[idx]
@@ -133,7 +135,7 @@ def _clearance_to_polygon(point: list[float], zone: Zone) -> float:
         edge_min = min(edge_min, _distance_to_segment(query, seg_a, seg_b))
     if inside:
         return -edge_min
-    return edge_min
+    return edge_min   #计算到每个边的距离
 
 
 def _zone_clearance(point: list[float], zone: Zone) -> float:
@@ -297,6 +299,7 @@ def run_collision_detection(
     no_fly_zones: list[Zone] | None = None,
     restricted_zones: list[Zone] | None = None,
 ) -> dict[str, int]:
+    #传入无人机，建筑，禁飞区，限飞区
     default_buildings, default_no_fly, default_restricted = _default_zones()
     used_buildings = buildings if buildings is not None else default_buildings
     used_no_fly = no_fly_zones if no_fly_zones is not None else default_no_fly
@@ -308,6 +311,7 @@ def run_collision_detection(
         drone["warning_category"] = "none"
         drone["_pending_warning_category"] = "general"
 
+    #状态赋值
     static_zones = [*used_buildings, *used_no_fly]
     for drone_id, drone in active_drones.items():
         status, msg, category = _evaluate_static_conflict(drone_id, drone, static_zones)
@@ -319,6 +323,8 @@ def run_collision_detection(
         if rz_status != STATUS_GREEN:
             drone["_pending_warning_category"] = rz_category
             _upgrade_alert(drone, rz_status, rz_msg)
+
+    #静态与动态区域的限制与更新
 
     _evaluate_dynamic_conflicts(active_drones)
 
